@@ -135,6 +135,7 @@ endif()
 
 add_executable(agent-probe-tests
     tests/cpp/test_placeholder.cpp
+    tests/cpp/test_parser.cpp
     src/parser/ts_parser.cpp
 )
 
