@@ -103,6 +103,7 @@ endif()
 # ─── Main executable ───────────────────────────────────────────
 add_executable(agent-probe
     src/main.cpp
+    src/parser/ts_parser.cpp
 )
 
 target_include_directories(agent-probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -134,6 +135,7 @@ endif()
 
 add_executable(agent-probe-tests
     tests/cpp/test_placeholder.cpp
+    src/parser/ts_parser.cpp
 )
 
 target_include_directories(agent-probe-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include <tree_sitter/api.h>
+#include "parser/ts_parser.h"
+#include "parser/python_profile.h"
 
 extern "C" const TSLanguage *tree_sitter_python();
 
@@ -42,4 +44,60 @@ TEST(TreeSitterTest, DetectsFunctionDefinition) {
 
     ts_tree_delete(tree);
     ts_parser_delete(parser);
+}
+
+// ─── Parser wrapper tests ──────────────────────────────────────
+
+TEST(ParserTest, ExtractsSimpleFunction) {
+    probe::TSParserWrapper parser;
+    parser.set_language(tree_sitter_python());
+    probe::PythonProfile profile;
+
+    std::string code = "def hello(name):\n    print(name)\n";
+    auto nodes = parser.parse_string(code, "test.py", profile);
+
+    ASSERT_EQ(nodes.size(), 1u);
+    EXPECT_EQ(nodes[0].type, probe::NodeType::FUNCTION_DEF);
+    EXPECT_EQ(nodes[0].name, "hello");
+    EXPECT_EQ(nodes[0].start_line, 1);
+    EXPECT_EQ(nodes[0].parameters.size(), 1u);
+    EXPECT_EQ(nodes[0].parameters[0], "name");
+    EXPECT_EQ(nodes[0].called_functions.size(), 1u);
+    EXPECT_EQ(nodes[0].called_functions[0], "print");
+}
+
+TEST(ParserTest, ExtractsMethodCalls) {
+    probe::TSParserWrapper parser;
+    parser.set_language(tree_sitter_python());
+    probe::PythonProfile profile;
+
+    std::string code =
+        "def fetch(url):\n"
+        "    response = requests.get(url)\n"
+        "    return response.json()\n";
+    auto nodes = parser.parse_string(code, "test.py", profile);
+
+    ASSERT_EQ(nodes.size(), 1u);
+    auto& fn = nodes[0];
+    EXPECT_EQ(fn.name, "fetch");
+    ASSERT_GE(fn.called_functions.size(), 2u);
+    EXPECT_EQ(fn.called_functions[0], "requests.get");
+    EXPECT_EQ(fn.called_functions[1], "response.json");
+}
+
+TEST(ParserTest, ExtractsMultipleFunctions) {
+    probe::TSParserWrapper parser;
+    parser.set_language(tree_sitter_python());
+    probe::PythonProfile profile;
+
+    std::string code =
+        "def foo():\n    pass\n\n"
+        "def bar(x, y):\n    return x + y\n";
+    auto nodes = parser.parse_string(code, "test.py", profile);
+
+    ASSERT_EQ(nodes.size(), 2u);
+    EXPECT_EQ(nodes[0].name, "foo");
+    EXPECT_EQ(nodes[0].parameters.size(), 0u);
+    EXPECT_EQ(nodes[1].name, "bar");
+    EXPECT_EQ(nodes[1].parameters.size(), 2u);
 }
