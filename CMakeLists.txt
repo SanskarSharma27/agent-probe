@@ -104,6 +104,7 @@ endif()
 add_executable(agent-probe
     src/main.cpp
     src/parser/ts_parser.cpp
+    src/graph/graph.cpp
 )
 
 target_include_directories(agent-probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -137,6 +138,7 @@ add_executable(agent-probe-tests
     tests/cpp/test_placeholder.cpp
     tests/cpp/test_parser.cpp
     src/parser/ts_parser.cpp
+    src/graph/graph.cpp
 )
 
 target_include_directories(agent-probe-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
