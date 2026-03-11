@@ -139,6 +139,7 @@ endif()
 add_executable(agent-probe-tests
     tests/cpp/test_placeholder.cpp
     tests/cpp/test_parser.cpp
+    tests/cpp/test_graph.cpp
     src/parser/ts_parser.cpp
     src/graph/graph.cpp
     src/graph/builder.cpp
