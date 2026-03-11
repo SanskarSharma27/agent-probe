@@ -26,4 +26,13 @@ std::string format_table(const std::vector<Finding>& findings, const ScanStats& 
 // Format findings as a brief summary with counts by type
 std::string format_summary(const std::vector<Finding>& findings, const ScanStats& stats);
 
+// Format findings as a colored table (ANSI escape codes)
+std::string format_table_color(const std::vector<Finding>& findings, const ScanStats& stats);
+
+// Print a progress line to stderr (overwrites previous line)
+void print_progress(const std::string& message, int current, int total);
+
+// Clear the progress line on stderr
+void clear_progress();
+
 } // namespace probe

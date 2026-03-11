@@ -58,12 +58,14 @@ int main(int argc, char* argv[]) {
     std::string path = ".";
     std::string format = "table";
     double min_confidence = 0.0;
+    bool no_color = false;
 
     app.add_option("-p,--path", path, "Path to repository to scan");
     app.add_option("-f,--format", format, "Output format: table, json, summary")
         ->check(CLI::IsMember({"table", "json", "summary"}));
     app.add_option("-c,--min-confidence", min_confidence, "Minimum confidence threshold (0.0-1.0)")
         ->check(CLI::Range(0.0, 1.0));
+    app.add_flag("--no-color", no_color, "Disable colored output");
 
     CLI11_PARSE(app, argc, argv);
 
@@ -95,20 +97,37 @@ int main(int argc, char* argv[]) {
 
     std::vector<ASTNode> all_nodes;
     int files_parsed = 0;
+    int total_files = static_cast<int>(files.size());
 
     for (const auto& file : files) {
+        files_parsed++;
+        if (!no_color && format != "json") {
+            std::string short_name = fs::path(file).filename().string();
+            print_progress("Parsing " + short_name, files_parsed, total_files);
+        }
         auto nodes = parser.parse_file(file, profile);
         all_nodes.insert(all_nodes.end(), nodes.begin(), nodes.end());
-        files_parsed++;
+    }
+
+    if (!no_color && format != "json") {
+        print_progress("Building graph", 0, 0);
     }
 
     // Build call graph
     GraphBuilder builder;
     Graph graph = builder.build(all_nodes);
 
+    if (!no_color && format != "json") {
+        print_progress("Computing metrics", 0, 0);
+    }
+
     // Compute graph metrics
     auto centrality = algorithms::betweenness_centrality(graph);
     auto pagerank = algorithms::pagerank(graph);
+
+    if (!no_color && format != "json") {
+        clear_progress();
+    }
 
     // Build analysis context
     AnalysisContext ctx{graph, all_nodes, profile, centrality, pagerank, {}};
@@ -153,12 +172,15 @@ int main(int argc, char* argv[]) {
     stats.total_findings = static_cast<int>(scored.size());
 
     // Output results
+    // Exit codes: 0 = no findings, 1 = findings found, 2 = error
     if (format == "json") {
         std::cout << format_json(filtered, stats) << "\n";
     } else if (format == "summary") {
         std::cout << format_summary(filtered, stats);
-    } else {
+    } else if (no_color) {
         std::cout << format_table(filtered, stats);
+    } else {
+        std::cout << format_table_color(filtered, stats);
     }
 
     return filtered.empty() ? 0 : 1;
