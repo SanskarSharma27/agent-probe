@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>agent-probe — Code Analysis Visualization</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            background: #0d1117;
+            color: #c9d1d9;
+            overflow: hidden;
+        }
+
+        /* Layout */
+        .container { display: flex; height: 100vh; }
+        #sidebar {
+            width: 340px;
+            background: #161b22;
+            border-right: 1px solid #30363d;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #graph-area { flex: 1; position: relative; }
+
+        /* Header */
+        .header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #30363d;
+        }
+        .header h1 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #58a6ff;
+        }
+        .header .subtitle {
+            font-size: 11px;
+            color: #8b949e;
+            margin-top: 4px;
+        }
+
+        /* Controls */
+        .controls {
+            padding: 12px 20px;
+            border-bottom: 1px solid #30363d;
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        .control-group:last-child { margin-bottom: 0; }
+        .control-group label {
+            display: block;
+            font-size: 11px;
+            color: #8b949e;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .control-group input[type="text"] {
+            width: 100%;
+            padding: 6px 10px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            color: #c9d1d9;
+            font-family: inherit;
+            font-size: 12px;
+        }
+        .control-group input:focus {
+            outline: none;
+            border-color: #58a6ff;
+        }
+        .btn {
+            padding: 6px 14px;
+            background: #238636;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .btn:hover { background: #2ea043; }
+        .btn:disabled { background: #21262d; color: #484f58; cursor: default; }
+        .btn-row { display: flex; gap: 8px; align-items: center; }
+
+        /* Stats bar */
+        .stats {
+            padding: 10px 20px;
+            border-bottom: 1px solid #30363d;
+            font-size: 11px;
+            color: #8b949e;
+            display: flex;
+            gap: 16px;
+        }
+        .stat-value { color: #c9d1d9; font-weight: 600; }
+
+        /* Legend */
+        .legend {
+            padding: 12px 20px;
+            border-bottom: 1px solid #30363d;
+        }
+        .legend-title {
+            font-size: 11px;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        /* Findings list */
+        .findings-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 0;
+        }
+        .finding-item {
+            padding: 8px 20px;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+            transition: background 0.15s;
+        }
+        .finding-item:hover { background: #1c2128; }
+        .finding-item.active {
+            background: #1c2128;
+            border-left-color: #58a6ff;
+        }
+        .finding-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: #e6edf3;
+        }
+        .finding-meta {
+            font-size: 11px;
+            color: #8b949e;
+            margin-top: 2px;
+        }
+        .finding-badge {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            margin-right: 6px;
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: absolute;
+            background: #1c2128;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 10px 14px;
+            font-size: 12px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.15s;
+            max-width: 300px;
+            z-index: 100;
+        }
+        .tooltip.visible { opacity: 1; }
+        .tooltip-title { font-weight: 600; color: #e6edf3; margin-bottom: 4px; }
+        .tooltip-detail { color: #8b949e; font-size: 11px; }
+
+        /* Loading/error */
+        .message {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #8b949e;
+            font-size: 14px;
+        }
+        .message.error { color: #f85149; }
+
+        /* SVG */
+        svg { width: 100%; height: 100%; }
+        .link { stroke-opacity: 0.3; }
+        .link.highlighted { stroke-opacity: 0.8; stroke-width: 2px; }
+        .node-label {
+            font-size: 10px;
+            fill: #8b949e;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="sidebar">
+            <div class="header">
+                <h1>agent-probe</h1>
+                <div class="subtitle">Static analysis for agent integration points</div>
+            </div>
+
+            <div class="controls">
+                <div class="control-group">
+                    <label>Scan path</label>
+                    <div class="btn-row">
+                        <input type="text" id="path-input" value="fixtures/python" placeholder="path/to/repo">
+                        <button class="btn" id="scan-btn" onclick="runScan()">Scan</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stats" id="stats-bar" style="display:none">
+                <div><span class="stat-value" id="stat-files">0</span> files</div>
+                <div><span class="stat-value" id="stat-nodes">0</span> nodes</div>
+                <div><span class="stat-value" id="stat-edges">0</span> edges</div>
+                <div><span class="stat-value" id="stat-findings">0</span> findings</div>
+            </div>
+
+            <div class="legend">
+                <div class="legend-title">Finding Types</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#f97583"></div> Retry Pattern</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#79c0ff"></div> API Call</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#d2a8ff"></div> Fan-Out</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#56d364"></div> CRUD Cluster</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#484f58"></div> No finding</div>
+            </div>
+
+            <div class="findings-list" id="findings-list">
+                <div class="message">Enter a path and click Scan</div>
+            </div>
+        </div>
+
+        <div id="graph-area">
+            <div class="tooltip" id="tooltip"></div>
+            <svg id="graph-svg"></svg>
+        </div>
+    </div>
+
+    <script>
+    // ─── Color scheme ──────────────────────────────────────────
+    const TYPE_COLORS = {
+        'RETRY':    '#f97583',
+        'API_CALL': '#79c0ff',
+        'FAN_OUT':  '#d2a8ff',
+        'CRUD':     '#56d364',
+    };
+    const DEFAULT_COLOR = '#484f58';
+    const BADGE_COLORS = {
+        'RETRY':    { bg: '#3d1a23', fg: '#f97583' },
+        'API_CALL': { bg: '#1a2a3d', fg: '#79c0ff' },
+        'FAN_OUT':  { bg: '#2d1a3d', fg: '#d2a8ff' },
+        'CRUD':     { bg: '#1a3d23', fg: '#56d364' },
+    };
+
+    let currentData = null;
+    let simulation = null;
+
+    // ─── API calls ─────────────────────────────────────────────
+    async function runScan() {
+        const path = document.getElementById('path-input').value.trim();
+        if (!path) return;
+
+        const btn = document.getElementById('scan-btn');
+        btn.disabled = true;
+        btn.textContent = '...';
+
+        document.getElementById('findings-list').innerHTML = '<div class="message">Scanning...</div>';
+
+        try {
+            const resp = await fetch(`/api/graph?path=${encodeURIComponent(path)}`);
+            if (!resp.ok) {
+                const err = await resp.json();
+                throw new Error(err.detail || 'Scan failed');
+            }
+            currentData = await resp.json();
+            renderAll();
+        } catch (e) {
+            document.getElementById('findings-list').innerHTML =
+                `<div class="message error">${e.message}</div>`;
+            clearGraph();
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Scan';
+        }
+    }
+
+    // ─── Render everything ─────────────────────────────────────
+    function renderAll() {
+        if (!currentData) return;
+        renderStats();
+        renderFindings();
+        renderGraph();
+    }
+
+    function renderStats() {
+        const d = currentData;
+        document.getElementById('stats-bar').style.display = 'flex';
+        document.getElementById('stat-files').textContent = d.files_scanned || 0;
+        document.getElementById('stat-nodes').textContent = (d.nodes || []).length;
+        document.getElementById('stat-edges').textContent = (d.edges || []).length;
+        document.getElementById('stat-findings').textContent = (d.findings || []).length;
+    }
+
+    function renderFindings() {
+        const list = document.getElementById('findings-list');
+        const findings = currentData.findings || [];
+
+        if (findings.length === 0) {
+            list.innerHTML = '<div class="message">No findings detected</div>';
+            return;
+        }
+
+        list.innerHTML = findings.map((f, i) => {
+            const colors = BADGE_COLORS[f.type] || { bg: '#21262d', fg: '#8b949e' };
+            return `
+                <div class="finding-item" data-index="${i}" onclick="highlightFinding(${i})">
+                    <div class="finding-name">
+                        <span class="finding-badge" style="background:${colors.bg};color:${colors.fg}">${f.type}</span>
+                        ${escapeHtml(f.function)}
+                    </div>
+                    <div class="finding-meta">${f.confidence.toFixed(2)} — ${escapeHtml(f.reason)}</div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // ─── D3 Graph ──────────────────────────────────────────────
+    function clearGraph() {
+        d3.select('#graph-svg').selectAll('*').remove();
+        if (simulation) simulation.stop();
+    }
+
+    function renderGraph() {
+        clearGraph();
+        const data = currentData;
+        if (!data || !data.nodes || data.nodes.length === 0) return;
+
+        const svg = d3.select('#graph-svg');
+        const container = document.getElementById('graph-area');
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+
+        svg.attr('viewBox', [0, 0, width, height]);
+
+        // Build lookup for findings per node
+        const findingsByNode = {};
+        (data.findings || []).forEach(f => {
+            const key = f.function;
+            if (!findingsByNode[key]) findingsByNode[key] = [];
+            findingsByNode[key].push(f);
+        });
+
+        // Prepare node data
+        const nodes = data.nodes.map(n => ({
+            ...n,
+            findings: findingsByNode[n.name] || [],
+            radius: getNodeRadius(n, findingsByNode[n.name]),
+            color: getNodeColor(n, findingsByNode[n.name]),
+        }));
+
+        // Prepare edge data (D3 expects source/target as node objects or indices)
+        const nodeById = {};
+        nodes.forEach(n => nodeById[n.id] = n);
+
+        const links = data.edges
+            .filter(e => nodeById[e.source] && nodeById[e.target])
+            .map(e => ({
+                source: e.source,
+                target: e.target,
+                type: e.type,
+            }));
+
+        // Force simulation
+        simulation = d3.forceSimulation(nodes)
+            .force('link', d3.forceLink(links).id(d => d.id).distance(80))
+            .force('charge', d3.forceManyBody().strength(-200))
+            .force('center', d3.forceCenter(width / 2, height / 2))
+            .force('collision', d3.forceCollide().radius(d => d.radius + 5));
+
+        // Zoom
+        const g = svg.append('g');
+        svg.call(d3.zoom()
+            .scaleExtent([0.2, 5])
+            .on('zoom', (event) => g.attr('transform', event.transform))
+        );
+
+        // Arrow markers
+        g.append('defs').selectAll('marker')
+            .data(['calls', 'imports', 'inherits', 'contains'])
+            .join('marker')
+            .attr('id', d => `arrow-${d}`)
+            .attr('viewBox', '0 -5 10 10')
+            .attr('refX', 20)
+            .attr('refY', 0)
+            .attr('markerWidth', 6)
+            .attr('markerHeight', 6)
+            .attr('orient', 'auto')
+            .append('path')
+            .attr('fill', '#30363d')
+            .attr('d', 'M0,-5L10,0L0,5');
+
+        // Links
+        const link = g.append('g')
+            .selectAll('line')
+            .data(links)
+            .join('line')
+            .attr('class', 'link')
+            .attr('stroke', '#30363d')
+            .attr('stroke-width', 1)
+            .attr('marker-end', d => `url(#arrow-${d.type})`);
+
+        // Nodes
+        const node = g.append('g')
+            .selectAll('circle')
+            .data(nodes)
+            .join('circle')
+            .attr('r', d => d.radius)
+            .attr('fill', d => d.color)
+            .attr('stroke', '#0d1117')
+            .attr('stroke-width', 1.5)
+            .call(drag(simulation))
+            .on('mouseover', showTooltip)
+            .on('mouseout', hideTooltip)
+            .on('click', (event, d) => focusNode(d));
+
+        // Labels
+        const label = g.append('g')
+            .selectAll('text')
+            .data(nodes)
+            .join('text')
+            .attr('class', 'node-label')
+            .attr('dx', d => d.radius + 4)
+            .attr('dy', 4)
+            .text(d => d.name);
+
+        // Tick
+        simulation.on('tick', () => {
+            link
+                .attr('x1', d => d.source.x)
+                .attr('y1', d => d.source.y)
+                .attr('x2', d => d.target.x)
+                .attr('y2', d => d.target.y);
+            node
+                .attr('cx', d => d.x)
+                .attr('cy', d => d.y);
+            label
+                .attr('x', d => d.x)
+                .attr('y', d => d.y);
+        });
+    }
+
+    function getNodeColor(node, findings) {
+        if (!findings || findings.length === 0) return DEFAULT_COLOR;
+        // Use the highest-confidence finding's type for color
+        const best = findings.reduce((a, b) => a.confidence > b.confidence ? a : b);
+        return TYPE_COLORS[best.type] || DEFAULT_COLOR;
+    }
+
+    function getNodeRadius(node, findings) {
+        const base = 6;
+        // Scale by PageRank
+        const prBoost = Math.min((node.pagerank || 0) * 200, 10);
+        // Boost if has findings
+        const findingBoost = (findings && findings.length > 0) ? 4 : 0;
+        return base + prBoost + findingBoost;
+    }
+
+    // ─── Interactions ──────────────────────────────────────────
+    function showTooltip(event, d) {
+        const tip = document.getElementById('tooltip');
+        let html = `<div class="tooltip-title">${escapeHtml(d.name)}</div>`;
+        html += `<div class="tooltip-detail">${escapeHtml(d.file || '')}:${d.line || ''}</div>`;
+        html += `<div class="tooltip-detail">PageRank: ${(d.pagerank || 0).toFixed(4)}</div>`;
+
+        if (d.findings && d.findings.length > 0) {
+            d.findings.forEach(f => {
+                const c = TYPE_COLORS[f.type] || '#8b949e';
+                html += `<div class="tooltip-detail" style="color:${c};margin-top:4px">`;
+                html += `${f.type} (${f.confidence.toFixed(2)}) — ${escapeHtml(f.reason)}</div>`;
+            });
+        }
+
+        tip.innerHTML = html;
+        tip.classList.add('visible');
+
+        const rect = document.getElementById('graph-area').getBoundingClientRect();
+        tip.style.left = (event.clientX - rect.left + 12) + 'px';
+        tip.style.top = (event.clientY - rect.top + 12) + 'px';
+    }
+
+    function hideTooltip() {
+        document.getElementById('tooltip').classList.remove('visible');
+    }
+
+    function highlightFinding(index) {
+        const findings = currentData.findings || [];
+        const f = findings[index];
+        if (!f) return;
+
+        // Highlight in sidebar
+        document.querySelectorAll('.finding-item').forEach(el => el.classList.remove('active'));
+        document.querySelector(`.finding-item[data-index="${index}"]`)?.classList.add('active');
+
+        // Highlight matching node in graph
+        d3.selectAll('circle')
+            .attr('stroke', d => {
+                if (d.name === f.function || (d.findings && d.findings.some(ff => ff.function === f.function))) {
+                    return '#58a6ff';
+                }
+                return '#0d1117';
+            })
+            .attr('stroke-width', d => {
+                if (d.name === f.function || (d.findings && d.findings.some(ff => ff.function === f.function))) {
+                    return 3;
+                }
+                return 1.5;
+            });
+    }
+
+    function focusNode(d) {
+        // Find this node in findings and highlight
+        const findings = currentData.findings || [];
+        const idx = findings.findIndex(f => f.function === d.name);
+        if (idx >= 0) highlightFinding(idx);
+
+        // Highlight connected edges
+        d3.selectAll('line')
+            .classed('highlighted', l => l.source.id === d.id || l.target.id === d.id);
+    }
+
+    // ─── Drag behavior ─────────────────────────────────────────
+    function drag(sim) {
+        return d3.drag()
+            .on('start', (event, d) => {
+                if (!event.active) sim.alphaTarget(0.3).restart();
+                d.fx = d.x; d.fy = d.y;
+            })
+            .on('drag', (event, d) => {
+                d.fx = event.x; d.fy = event.y;
+            })
+            .on('end', (event, d) => {
+                if (!event.active) sim.alphaTarget(0);
+                d.fx = null; d.fy = null;
+            });
+    }
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // Enter key to scan
+    document.getElementById('path-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') runScan();
+    });
+    </script>
+</body>
+</html>
