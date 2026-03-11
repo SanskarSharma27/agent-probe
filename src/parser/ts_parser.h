@@ -59,6 +59,18 @@ private:
     std::vector<std::string> extract_decorators(TSNode decorated_node,
                                                 const std::string& source,
                                                 const LanguageProfile& profile);
+
+    // Extract import statements
+    void extract_imports(TSNode node, const std::string& source,
+                        const std::string& file_path,
+                        const LanguageProfile& profile,
+                        std::vector<ASTNode>& results);
+
+    // Extract class definitions (name, base classes, methods)
+    void extract_classes(TSNode node, const std::string& source,
+                        const std::string& file_path,
+                        const LanguageProfile& profile,
+                        std::vector<ASTNode>& results);
 };
 
 } // namespace probe
