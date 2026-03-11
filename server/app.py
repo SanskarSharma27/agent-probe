@@ -41,6 +41,15 @@ def find_binary() -> Path:
     )
 
 
+def _build_env() -> dict:
+    """Build environment with MSYS2/MinGW-w64 on PATH (Windows)."""
+    env = os.environ.copy()
+    msys_bin = r"C:\msys64\ucrt64\bin"
+    if os.path.isdir(msys_bin) and msys_bin not in env.get("PATH", ""):
+        env["PATH"] = msys_bin + os.pathsep + env.get("PATH", "")
+    return env
+
+
 def run_probe(target_path: str, fmt: str = "json", min_confidence: float = 0.0) -> dict:
     """Run agent-probe CLI and return parsed JSON output."""
     binary = find_binary()
@@ -58,15 +67,24 @@ def run_probe(target_path: str, fmt: str = "json", min_confidence: float = 0.0) 
         text=True,
         timeout=60,
         cwd=str(PROJECT_ROOT),
+        env=_build_env(),
     )
 
     if result.returncode == 2:
         raise HTTPException(status_code=400, detail=result.stderr.strip())
 
-    if not result.stdout.strip():
-        raise HTTPException(status_code=500, detail="No output from agent-probe")
+    stdout = result.stdout.strip()
+    if not stdout:
+        detail = f"No output from agent-probe. stderr: {result.stderr.strip()}"
+        raise HTTPException(status_code=500, detail=detail)
 
-    return json.loads(result.stdout)
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Invalid JSON from agent-probe: {e}. Output: {stdout[:200]}"
+        )
 
 
 @app.get("/api/health")
