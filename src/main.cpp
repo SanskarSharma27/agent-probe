@@ -4,7 +4,6 @@
 #include <filesystem>
 
 #include <CLI/CLI.hpp>
-#include <nlohmann/json.hpp>
 #include <tree_sitter/api.h>
 
 #include "parser/ts_parser.h"
@@ -18,6 +17,7 @@
 #include "analyzers/crud_analyzer.h"
 #include "scoring/scorer.h"
 #include "models/finding.h"
+#include "cli/formatter.h"
 
 extern "C" const TSLanguage *tree_sitter_python();
 
@@ -142,91 +142,23 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Build stats for formatters
+    ScanStats stats;
+    stats.version = VERSION;
+    stats.path = path;
+    stats.files_scanned = files_parsed;
+    stats.nodes_parsed = static_cast<int>(all_nodes.size());
+    stats.graph_nodes = graph.node_count();
+    stats.graph_edges = graph.edge_count();
+    stats.total_findings = static_cast<int>(scored.size());
+
     // Output results
     if (format == "json") {
-        nlohmann::json output;
-        output["version"] = VERSION;
-        output["path"] = path;
-        output["files_scanned"] = files_parsed;
-        output["nodes_parsed"] = all_nodes.size();
-        output["graph_nodes"] = graph.node_count();
-        output["graph_edges"] = graph.edge_count();
-        output["total_findings"] = scored.size();
-        output["shown_findings"] = filtered.size();
-
-        nlohmann::json findings_json = nlohmann::json::array();
-        for (const auto& f : filtered) {
-            nlohmann::json fj;
-            fj["file"] = f.file_path;
-            fj["line"] = f.line_number;
-            fj["function"] = f.function_name;
-            fj["type"] = finding_type_str(f.type);
-            fj["confidence"] = f.confidence;
-            fj["reason"] = f.reason;
-            fj["evidence"] = f.evidence;
-            findings_json.push_back(fj);
-        }
-        output["findings"] = findings_json;
-        std::cout << output.dump(2) << "\n";
-
+        std::cout << format_json(filtered, stats) << "\n";
     } else if (format == "summary") {
-        std::cout << "agent-probe v" << VERSION << "\n";
-        std::cout << "Scanned " << files_parsed << " files, "
-                  << all_nodes.size() << " AST nodes\n";
-        std::cout << "Graph: " << graph.node_count() << " nodes, "
-                  << graph.edge_count() << " edges\n";
-        std::cout << "\nFindings: " << filtered.size();
-        if (min_confidence > 0.0) {
-            std::cout << " (threshold >= " << min_confidence << ")";
-        }
-        std::cout << "\n";
-
-        // Count by type
-        int api = 0, fan = 0, retry = 0, crud = 0;
-        for (const auto& f : filtered) {
-            switch (f.type) {
-                case FindingType::API_CALL: api++; break;
-                case FindingType::FAN_OUT: fan++; break;
-                case FindingType::RETRY_PATTERN: retry++; break;
-                case FindingType::CRUD_CLUSTER: crud++; break;
-            }
-        }
-        if (api)   std::cout << "  API calls:      " << api << "\n";
-        if (fan)   std::cout << "  Fan-out:        " << fan << "\n";
-        if (retry) std::cout << "  Retry patterns: " << retry << "\n";
-        if (crud)  std::cout << "  CRUD clusters:  " << crud << "\n";
-
+        std::cout << format_summary(filtered, stats);
     } else {
-        // Table format
-        std::cout << "agent-probe v" << VERSION << " — " << files_parsed
-                  << " files, " << graph.node_count() << " graph nodes\n\n";
-
-        if (filtered.empty()) {
-            std::cout << "No findings";
-            if (min_confidence > 0.0) {
-                std::cout << " above threshold " << min_confidence;
-            }
-            std::cout << ".\n";
-        } else {
-            // Header
-            printf("%-6s  %-12s  %-8s  %-30s  %s\n",
-                   "CONF", "TYPE", "LINE", "FUNCTION", "FILE");
-            printf("%-6s  %-12s  %-8s  %-30s  %s\n",
-                   "------", "------------", "--------",
-                   "------------------------------",
-                   "--------------------");
-
-            for (const auto& f : filtered) {
-                printf("%-6.2f  %-12s  %-8d  %-30s  %s\n",
-                       f.confidence,
-                       finding_type_str(f.type).c_str(),
-                       f.line_number,
-                       f.function_name.c_str(),
-                       f.file_path.c_str());
-            }
-
-            std::cout << "\n" << filtered.size() << " finding(s)\n";
-        }
+        std::cout << format_table(filtered, stats);
     }
 
     return filtered.empty() ? 0 : 1;

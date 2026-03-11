@@ -112,6 +112,7 @@ add_executable(agent-probe
     src/analyzers/retry_analyzer.cpp
     src/analyzers/crud_analyzer.cpp
     src/scoring/scorer.cpp
+    src/cli/formatter.cpp
 )
 
 target_include_directories(agent-probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
