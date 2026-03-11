@@ -111,6 +111,7 @@ add_executable(agent-probe
     src/analyzers/fan_out_analyzer.cpp
     src/analyzers/retry_analyzer.cpp
     src/analyzers/crud_analyzer.cpp
+    src/scoring/scorer.cpp
 )
 
 target_include_directories(agent-probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -152,6 +153,7 @@ add_executable(agent-probe-tests
     src/analyzers/fan_out_analyzer.cpp
     src/analyzers/retry_analyzer.cpp
     src/analyzers/crud_analyzer.cpp
+    src/scoring/scorer.cpp
 )
 
 target_include_directories(agent-probe-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
