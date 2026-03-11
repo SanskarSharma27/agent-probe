@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 project(agent-probe VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -68,6 +69,37 @@ set_target_properties(tree_sitter_python_lib PROPERTIES
     C_STANDARD_REQUIRED ON
 )
 
+# ─── CLI11 (header-only, manual setup) ─────────────────────────
+FetchContent_Declare(
+    cli11
+    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+    GIT_TAG        v2.3.2
+    GIT_SHALLOW    TRUE
+)
+
+FetchContent_GetProperties(cli11)
+if(NOT cli11_POPULATED)
+    FetchContent_Populate(cli11)
+endif()
+
+add_library(cli11_headers INTERFACE)
+target_include_directories(cli11_headers INTERFACE ${cli11_SOURCE_DIR}/include)
+
+# ─── nlohmann/json ─────────────────────────────────────────────
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+
+FetchContent_GetProperties(json)
+if(NOT json_POPULATED)
+    FetchContent_Populate(json)
+    set(JSON_BuildTests OFF CACHE INTERNAL "")
+    add_subdirectory(${json_SOURCE_DIR} ${json_BINARY_DIR})
+endif()
+
 # ─── Main executable ───────────────────────────────────────────
 add_executable(agent-probe
     src/main.cpp
@@ -79,4 +111,40 @@ target_link_libraries(agent-probe
     PRIVATE
         tree_sitter_lib
         tree_sitter_python_lib
+        cli11_headers
+        nlohmann_json::nlohmann_json
 )
+
+# ─── GoogleTest ────────────────────────────────────────────────
+enable_testing()
+
+FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG        v1.14.0
+    GIT_SHALLOW    TRUE
+)
+
+FetchContent_GetProperties(googletest)
+if(NOT googletest_POPULATED)
+    FetchContent_Populate(googletest)
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR})
+endif()
+
+add_executable(agent-probe-tests
+    tests/cpp/test_placeholder.cpp
+)
+
+target_include_directories(agent-probe-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+target_link_libraries(agent-probe-tests
+    PRIVATE
+        GTest::gtest_main
+        tree_sitter_lib
+        tree_sitter_python_lib
+        nlohmann_json::nlohmann_json
+)
+
+include(GoogleTest)
+gtest_discover_tests(agent-probe-tests)
