@@ -106,6 +106,7 @@ add_executable(agent-probe
     src/parser/ts_parser.cpp
     src/graph/graph.cpp
     src/graph/builder.cpp
+    src/graph/algorithms.cpp
 )
 
 target_include_directories(agent-probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -141,6 +142,7 @@ add_executable(agent-probe-tests
     src/parser/ts_parser.cpp
     src/graph/graph.cpp
     src/graph/builder.cpp
+    src/graph/algorithms.cpp
 )
 
 target_include_directories(agent-probe-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
