@@ -61,8 +61,8 @@ int main(int argc, char* argv[]) {
     bool no_color = false;
 
     app.add_option("-p,--path", path, "Path to repository to scan");
-    app.add_option("-f,--format", format, "Output format: table, json, summary")
-        ->check(CLI::IsMember({"table", "json", "summary"}));
+    app.add_option("-f,--format", format, "Output format: table, json, summary, graph")
+        ->check(CLI::IsMember({"table", "json", "summary", "graph"}));
     app.add_option("-c,--min-confidence", min_confidence, "Minimum confidence threshold (0.0-1.0)")
         ->check(CLI::Range(0.0, 1.0));
     app.add_flag("--no-color", no_color, "Disable colored output");
@@ -101,7 +101,7 @@ int main(int argc, char* argv[]) {
 
     for (const auto& file : files) {
         files_parsed++;
-        if (!no_color && format != "json") {
+        if (!no_color && format != "json" && format != "graph") {
             std::string short_name = fs::path(file).filename().string();
             print_progress("Parsing " + short_name, files_parsed, total_files);
         }
@@ -109,25 +109,21 @@ int main(int argc, char* argv[]) {
         all_nodes.insert(all_nodes.end(), nodes.begin(), nodes.end());
     }
 
-    if (!no_color && format != "json") {
-        print_progress("Building graph", 0, 0);
-    }
+    bool show_progress = !no_color && format != "json" && format != "graph";
+
+    if (show_progress) print_progress("Building graph", 0, 0);
 
     // Build call graph
     GraphBuilder builder;
     Graph graph = builder.build(all_nodes);
 
-    if (!no_color && format != "json") {
-        print_progress("Computing metrics", 0, 0);
-    }
+    if (show_progress) print_progress("Computing metrics", 0, 0);
 
     // Compute graph metrics
     auto centrality = algorithms::betweenness_centrality(graph);
     auto pagerank = algorithms::pagerank(graph);
 
-    if (!no_color && format != "json") {
-        clear_progress();
-    }
+    if (show_progress) clear_progress();
 
     // Build analysis context
     AnalysisContext ctx{graph, all_nodes, profile, centrality, pagerank, {}};
@@ -173,7 +169,9 @@ int main(int argc, char* argv[]) {
 
     // Output results
     // Exit codes: 0 = no findings, 1 = findings found, 2 = error
-    if (format == "json") {
+    if (format == "graph") {
+        std::cout << format_graph_json(filtered, stats, graph, pagerank) << "\n";
+    } else if (format == "json") {
         std::cout << format_json(filtered, stats) << "\n";
     } else if (format == "summary") {
         std::cout << format_summary(filtered, stats);

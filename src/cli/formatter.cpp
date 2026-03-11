@@ -36,6 +36,83 @@ static const char* type_color(FindingType t) {
     return WHITE;
 }
 
+static std::string edge_type_str(EdgeType t) {
+    switch (t) {
+        case EdgeType::CALLS:    return "calls";
+        case EdgeType::IMPORTS:  return "imports";
+        case EdgeType::INHERITS: return "inherits";
+        case EdgeType::CONTAINS: return "contains";
+    }
+    return "unknown";
+}
+
+std::string format_graph_json(const std::vector<Finding>& findings, const ScanStats& stats,
+                               const Graph& graph,
+                               const std::unordered_map<int, double>& pagerank) {
+    nlohmann::json output;
+    output["version"] = stats.version;
+    output["path"] = stats.path;
+    output["files_scanned"] = stats.files_scanned;
+
+    // Graph nodes
+    nlohmann::json nodes_json = nlohmann::json::array();
+    for (int id : graph.all_node_ids()) {
+        const auto& node = graph.get_node(id);
+        nlohmann::json nj;
+        nj["id"] = id;
+        nj["name"] = node.name;
+        nj["file"] = node.file_path;
+        nj["line"] = node.line_number;
+        nj["type"] = node.node_type;
+
+        auto pr_it = pagerank.find(id);
+        nj["pagerank"] = (pr_it != pagerank.end()) ? pr_it->second : 0.0;
+
+        // Check if this node has any findings
+        nj["finding_types"] = nlohmann::json::array();
+        for (const auto& f : findings) {
+            if (f.function_name == node.name ||
+                f.function_name.find(node.name) != std::string::npos) {
+                nj["finding_types"].push_back(finding_type_str(f.type));
+            }
+        }
+
+        nodes_json.push_back(nj);
+    }
+    output["nodes"] = nodes_json;
+
+    // Graph edges
+    nlohmann::json edges_json = nlohmann::json::array();
+    for (int id : graph.all_node_ids()) {
+        for (const auto& edge : graph.get_edges(id)) {
+            nlohmann::json ej;
+            ej["source"] = id;
+            ej["target"] = edge.target;
+            ej["type"] = edge_type_str(edge.type);
+            ej["weight"] = edge.weight;
+            edges_json.push_back(ej);
+        }
+    }
+    output["edges"] = edges_json;
+
+    // Findings
+    nlohmann::json findings_json = nlohmann::json::array();
+    for (const auto& f : findings) {
+        nlohmann::json fj;
+        fj["file"] = f.file_path;
+        fj["line"] = f.line_number;
+        fj["function"] = f.function_name;
+        fj["type"] = finding_type_str(f.type);
+        fj["confidence"] = f.confidence;
+        fj["reason"] = f.reason;
+        fj["evidence"] = f.evidence;
+        findings_json.push_back(fj);
+    }
+    output["findings"] = findings_json;
+
+    return output.dump(2);
+}
+
 std::string format_json(const std::vector<Finding>& findings, const ScanStats& stats) {
     nlohmann::json output;
     output["version"] = stats.version;
