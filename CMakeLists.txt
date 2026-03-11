@@ -107,6 +107,7 @@ add_executable(agent-probe
     src/graph/graph.cpp
     src/graph/builder.cpp
     src/graph/algorithms.cpp
+    src/analyzers/api_call_analyzer.cpp
 )
 
 target_include_directories(agent-probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -144,6 +145,7 @@ add_executable(agent-probe-tests
     src/graph/graph.cpp
     src/graph/builder.cpp
     src/graph/algorithms.cpp
+    src/analyzers/api_call_analyzer.cpp
 )
 
 target_include_directories(agent-probe-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
