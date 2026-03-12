@@ -87,6 +87,39 @@
         .btn:disabled { background: #21262d; color: #484f58; cursor: default; }
         .btn-row { display: flex; gap: 8px; align-items: center; }
 
+        /* Source toggle tabs */
+        .source-tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 8px;
+        }
+        .source-tab {
+            flex: 1;
+            padding: 5px 0;
+            text-align: center;
+            font-size: 11px;
+            color: #8b949e;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .source-tab:first-child { border-radius: 4px 0 0 4px; }
+        .source-tab:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+        .source-tab.active {
+            background: #1f6feb;
+            border-color: #1f6feb;
+            color: #fff;
+        }
+        .clone-status {
+            font-size: 11px;
+            color: #8b949e;
+            margin-top: 6px;
+            display: none;
+        }
+        .clone-status.visible { display: block; }
+        .clone-status.error { color: #f85149; }
+
         /* Stats bar */
         .stats {
             padding: 10px 20px;
@@ -208,12 +241,22 @@
             </div>
 
             <div class="controls">
-                <div class="control-group">
-                    <label>Scan path</label>
+                <div class="source-tabs">
+                    <div class="source-tab active" id="tab-local" onclick="switchTab('local')">Local Path</div>
+                    <div class="source-tab" id="tab-github" onclick="switchTab('github')">GitHub URL</div>
+                </div>
+                <div class="control-group" id="local-input-group">
                     <div class="btn-row">
                         <input type="text" id="path-input" value="fixtures/python" placeholder="path/to/repo">
                         <button class="btn" id="scan-btn" onclick="runScan()">Scan</button>
                     </div>
+                </div>
+                <div class="control-group" id="github-input-group" style="display:none">
+                    <div class="btn-row">
+                        <input type="text" id="github-input" placeholder="https://github.com/owner/repo">
+                        <button class="btn" id="github-btn" onclick="runGithubScan()">Clone & Scan</button>
+                    </div>
+                    <div class="clone-status" id="clone-status"></div>
                 </div>
             </div>
 
@@ -262,6 +305,51 @@
 
     let currentData = null;
     let simulation = null;
+    let activeTab = 'local';
+
+    // ─── Tab switching ──────────────────────────────────────────
+    function switchTab(tab) {
+        activeTab = tab;
+        document.getElementById('tab-local').classList.toggle('active', tab === 'local');
+        document.getElementById('tab-github').classList.toggle('active', tab === 'github');
+        document.getElementById('local-input-group').style.display = tab === 'local' ? 'block' : 'none';
+        document.getElementById('github-input-group').style.display = tab === 'github' ? 'block' : 'none';
+    }
+
+    // ─── GitHub scan ────────────────────────────────────────────
+    async function runGithubScan() {
+        const url = document.getElementById('github-input').value.trim();
+        if (!url) return;
+
+        const btn = document.getElementById('github-btn');
+        const status = document.getElementById('clone-status');
+        btn.disabled = true;
+        btn.textContent = 'Cloning...';
+        status.className = 'clone-status visible';
+        status.textContent = 'Cloning repository (this may take a moment)...';
+
+        document.getElementById('findings-list').innerHTML = '<div class="message">Cloning & scanning...</div>';
+
+        try {
+            const resp = await fetch(`/api/github?url=${encodeURIComponent(url)}`);
+            if (!resp.ok) {
+                const err = await resp.json();
+                throw new Error(err.detail || 'Scan failed');
+            }
+            currentData = await resp.json();
+            status.textContent = 'Clone complete. Showing results.';
+            renderAll();
+        } catch (e) {
+            status.className = 'clone-status visible error';
+            status.textContent = e.message;
+            document.getElementById('findings-list').innerHTML =
+                `<div class="message error">${escapeHtml(e.message)}</div>`;
+            clearGraph();
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Clone & Scan';
+        }
+    }
 
     // ─── API calls ─────────────────────────────────────────────
     async function runScan() {
@@ -560,6 +648,9 @@
     // Enter key to scan
     document.getElementById('path-input').addEventListener('keydown', e => {
         if (e.key === 'Enter') runScan();
+    });
+    document.getElementById('github-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') runGithubScan();
     });
     </script>
 </body>

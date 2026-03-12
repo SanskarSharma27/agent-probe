@@ -7,6 +7,9 @@ Also serves the static D3.js frontend.
 
 import json
 import subprocess
+import shutil
+import tempfile
+import re
 import os
 from pathlib import Path
 from typing import Optional
@@ -127,6 +130,52 @@ def graph(
         raise HTTPException(status_code=404, detail=f"Path not found: {path}")
 
     return run_probe(str(abs_path), fmt="graph", min_confidence=min_confidence)
+
+
+# ── GitHub URL support ────────────────────────────────────────────
+
+_GITHUB_RE = re.compile(
+    r"^https?://github\.com/[\w.\-]+/[\w.\-]+(\.git)?(/.*)?$", re.IGNORECASE
+)
+
+
+def _clone_repo(url: str) -> Path:
+    """Shallow-clone a GitHub repo to a temp directory."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="agent-probe-"))
+    try:
+        subprocess.run(
+            ["git", "clone", "--depth", "1", "--quiet", url, str(tmp_dir)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.CalledProcessError as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to clone {url}: {e.stderr.strip()}"
+        )
+    except subprocess.TimeoutExpired:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise HTTPException(status_code=408, detail="Clone timed out (120s limit)")
+    return tmp_dir
+
+
+@app.get("/api/github")
+def github_scan(
+    url: str = Query(..., description="GitHub repository URL"),
+    min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+):
+    """Clone a GitHub repo and return graph analysis."""
+    if not _GITHUB_RE.match(url):
+        raise HTTPException(status_code=400, detail="Invalid GitHub URL")
+
+    tmp_dir = _clone_repo(url)
+    try:
+        return run_probe(str(tmp_dir), fmt="graph", min_confidence=min_confidence)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # Serve static files (D3.js frontend)

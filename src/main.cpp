@@ -4,6 +4,10 @@
 #include <filesystem>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
+#include <cstdlib>
+#include <array>
+#include <regex>
 
 #include <CLI/CLI.hpp>
 #include <tree_sitter/api.h>
@@ -30,6 +34,23 @@ using namespace probe;
 
 const std::string VERSION = "0.1.0";
 
+// Directories to skip during recursive scanning
+static const std::unordered_set<std::string> SKIP_DIRS = {
+    ".git", ".svn", ".hg",
+    ".venv", "venv", "env", ".env",
+    "node_modules",
+    "__pycache__", ".mypy_cache", ".pytest_cache", ".tox", ".nox",
+    "build", "dist", "out", "_build",
+    ".next", ".nuxt",
+    "site-packages",
+    "vendor",
+    "coverage", ".coverage",
+    ".eggs", "*.egg-info",
+    ".idea", ".vscode",
+    "target",  // Rust/Java
+    "cmake-build-debug", "cmake-build-release",
+};
+
 // Maps file extension → (profile, TSLanguage)
 struct LangEntry {
     const LanguageProfile* profile;
@@ -39,23 +60,100 @@ struct LangEntry {
 // Recursively collect all files matching any supported extension
 static std::vector<std::string> collect_files(
     const std::string& root,
-    const std::unordered_map<std::string, LangEntry>& lang_map) {
-    std::vector<std::string> files;
+    const std::unordered_map<std::string, LangEntry>& lang_map,
+    const std::vector<std::string>& extra_excludes = {}) {
 
-    std::error_code ec;
-    for (const auto& entry : fs::recursive_directory_iterator(root, ec)) {
-        if (!entry.is_regular_file()) continue;
-        std::string ext = entry.path().extension().string();
-        if (lang_map.count(ext)) {
-            files.push_back(entry.path().string());
-        }
+    // Merge default skip set with user-provided excludes
+    std::unordered_set<std::string> skip = SKIP_DIRS;
+    for (const auto& ex : extra_excludes) {
+        skip.insert(ex);
     }
 
-    if (ec) {
-        std::cerr << "Warning: error scanning directory: " << ec.message() << "\n";
+    std::vector<std::string> files;
+    std::error_code ec;
+
+    for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+         it != fs::recursive_directory_iterator(); ) {
+
+        if (ec) {
+            std::cerr << "Warning: " << ec.message() << "\n";
+            ec.clear();
+            ++it;
+            continue;
+        }
+
+        const auto& entry = *it;
+
+        // Skip excluded directories
+        if (entry.is_directory()) {
+            std::string dirname = entry.path().filename().string();
+            if (skip.count(dirname) || (!dirname.empty() && dirname[0] == '.')) {
+                it.disable_recursion_pending();
+                ++it;
+                continue;
+            }
+        }
+
+        if (entry.is_regular_file()) {
+            std::string ext = entry.path().extension().string();
+            if (lang_map.count(ext)) {
+                files.push_back(entry.path().string());
+            }
+        }
+
+        ++it;
     }
 
     return files;
+}
+
+// Check if a string looks like a GitHub URL
+static bool is_github_url(const std::string& s) {
+    // Match https://github.com/owner/repo or git@github.com:owner/repo
+    static const std::regex gh_regex(
+        R"(^(https?://github\.com/[\w.\-]+/[\w.\-]+|git@github\.com:[\w.\-]+/[\w.\-]+)(\.git)?(/.*)?$)",
+        std::regex::icase);
+    return std::regex_match(s, gh_regex);
+}
+
+// Clone a git repo to a temporary directory, return the path
+static std::string clone_repo(const std::string& url) {
+    // Create temp dir
+    std::string tmp_base = fs::temp_directory_path().string();
+    std::string tmp_dir = tmp_base + "/agent-probe-clone-" +
+        std::to_string(std::hash<std::string>{}(url) % 1000000);
+
+    // Remove if exists from a previous run
+    std::error_code ec;
+    fs::remove_all(tmp_dir, ec);
+
+    std::string cmd = "git clone --depth 1 --quiet \"" + url + "\" \"" + tmp_dir + "\" 2>&1";
+
+    std::array<char, 256> buffer;
+    std::string output;
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) {
+        std::cerr << "Error: failed to run git clone\n";
+        return "";
+    }
+    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
+        output += buffer.data();
+    }
+    int status = pclose(pipe);
+
+    if (status != 0) {
+        std::cerr << "Error: git clone failed: " << output << "\n";
+        return "";
+    }
+
+    return tmp_dir;
+}
+
+// Clean up a cloned temp directory
+static void cleanup_clone(const std::string& dir) {
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    // Silently ignore errors — Windows may hold .git locks briefly
 }
 
 int main(int argc, char* argv[]) {
@@ -66,15 +164,31 @@ int main(int argc, char* argv[]) {
     std::string format = "table";
     double min_confidence = 0.0;
     bool no_color = false;
+    std::vector<std::string> excludes;
 
-    app.add_option("-p,--path", path, "Path to repository to scan");
+    app.add_option("-p,--path", path, "Path to repository or GitHub URL to scan");
     app.add_option("-f,--format", format, "Output format: table, json, summary, graph")
         ->check(CLI::IsMember({"table", "json", "summary", "graph"}));
     app.add_option("-c,--min-confidence", min_confidence, "Minimum confidence threshold (0.0-1.0)")
         ->check(CLI::Range(0.0, 1.0));
     app.add_flag("--no-color", no_color, "Disable colored output");
+    app.add_option("-e,--exclude", excludes, "Additional directory names to exclude (repeatable)");
 
     CLI11_PARSE(app, argc, argv);
+
+    // Handle GitHub URL: clone to temp dir
+    std::string cloned_dir;
+    if (is_github_url(path)) {
+        if (!no_color && format != "json" && format != "graph") {
+            std::cerr << "Cloning " << path << " ...\n";
+        }
+        cloned_dir = clone_repo(path);
+        if (cloned_dir.empty()) {
+            std::cerr << "Error: failed to clone repository: " << path << "\n";
+            return 2;
+        }
+        path = cloned_dir;
+    }
 
     // Validate path exists
     if (!fs::exists(path)) {
@@ -99,11 +213,12 @@ int main(int argc, char* argv[]) {
     if (fs::is_regular_file(path)) {
         files.push_back(path);
     } else {
-        files = collect_files(path, lang_map);
+        files = collect_files(path, lang_map, excludes);
     }
 
     if (files.empty()) {
         std::cerr << "No supported files found in: " << path << "\n";
+        if (!cloned_dir.empty()) cleanup_clone(cloned_dir);
         return 2;
     }
 
@@ -221,6 +336,9 @@ int main(int argc, char* argv[]) {
     } else {
         std::cout << format_table_color(filtered, stats);
     }
+
+    // Clean up cloned repo if we created one
+    if (!cloned_dir.empty()) cleanup_clone(cloned_dir);
 
     return filtered.empty() ? 0 : 1;
 }
