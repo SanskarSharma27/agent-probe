@@ -10,6 +10,7 @@ public:
     std::vector<std::string> file_extensions() const override { return {".py"}; }
 
     // Tree-sitter Python grammar node types
+    std::string root_node_type() const override { return "module"; }
     std::string function_def_type() const override { return "function_definition"; }
     std::string class_def_type() const override { return "class_definition"; }
     std::string call_expression_type() const override { return "call"; }

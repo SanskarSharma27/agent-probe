@@ -69,6 +69,37 @@ set_target_properties(tree_sitter_python_lib PROPERTIES
     C_STANDARD_REQUIRED ON
 )
 
+# ─── tree-sitter-javascript (grammar) ─────────────────────────
+FetchContent_Declare(
+    tree_sitter_javascript
+    GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter-javascript.git
+    GIT_TAG        v0.23.1
+    GIT_SHALLOW    TRUE
+)
+
+FetchContent_GetProperties(tree_sitter_javascript)
+if(NOT tree_sitter_javascript_POPULATED)
+    FetchContent_Populate(tree_sitter_javascript)
+endif()
+
+add_library(tree_sitter_javascript_lib STATIC
+    ${tree_sitter_javascript_SOURCE_DIR}/src/parser.c
+    ${tree_sitter_javascript_SOURCE_DIR}/src/scanner.c
+)
+
+target_include_directories(tree_sitter_javascript_lib
+    PRIVATE
+        ${tree_sitter_javascript_SOURCE_DIR}/src
+        ${tree_sitter_SOURCE_DIR}/lib/include
+)
+
+target_link_libraries(tree_sitter_javascript_lib PRIVATE tree_sitter_lib)
+
+set_target_properties(tree_sitter_javascript_lib PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+)
+
 # ─── CLI11 (header-only, manual setup) ─────────────────────────
 FetchContent_Declare(
     cli11
@@ -121,6 +152,7 @@ target_link_libraries(agent-probe
     PRIVATE
         tree_sitter_lib
         tree_sitter_python_lib
+        tree_sitter_javascript_lib
         cli11_headers
         nlohmann_json::nlohmann_json
 )
@@ -165,6 +197,7 @@ target_link_libraries(agent-probe-tests
         GTest::gtest_main
         tree_sitter_lib
         tree_sitter_python_lib
+        tree_sitter_javascript_lib
         nlohmann_json::nlohmann_json
 )
 

@@ -16,6 +16,7 @@ public:
     virtual std::vector<std::string> file_extensions() const = 0;
 
     // Tree-sitter node type names
+    virtual std::string root_node_type() const = 0;     // "module" (Python) or "program" (JS)
     virtual std::string function_def_type() const = 0;
     virtual std::string class_def_type() const = 0;
     virtual std::string call_expression_type() const = 0;
@@ -23,6 +24,10 @@ public:
     virtual std::string import_from_type() const = 0;
     virtual std::string decorator_type() const = 0;
     virtual std::string attribute_type() const = 0;
+
+    // Optional: additional function-like node types (e.g. arrow_function, method_definition)
+    virtual std::string arrow_function_type() const { return ""; }
+    virtual std::string method_def_type() const { return ""; }
 
     // Tree-sitter field names for extracting child nodes
     virtual std::string field_name() const = 0;        // "name" field in function/class def
