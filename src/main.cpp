@@ -2,12 +2,15 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <memory>
+#include <unordered_map>
 
 #include <CLI/CLI.hpp>
 #include <tree_sitter/api.h>
 
 #include "parser/ts_parser.h"
 #include "parser/python_profile.h"
+#include "parser/javascript_profile.h"
 #include "graph/builder.h"
 #include "graph/algorithms.h"
 #include "analyzers/analysis_context.h"
@@ -20,27 +23,31 @@
 #include "cli/formatter.h"
 
 extern "C" const TSLanguage *tree_sitter_python();
+extern "C" const TSLanguage *tree_sitter_javascript();
 
 namespace fs = std::filesystem;
 using namespace probe;
 
 const std::string VERSION = "0.1.0";
 
-// Recursively collect all files matching the profile's extensions
-static std::vector<std::string> collect_files(const std::string& root,
-                                               const std::vector<std::string>& extensions) {
+// Maps file extension → (profile, TSLanguage)
+struct LangEntry {
+    const LanguageProfile* profile;
+    const TSLanguage* ts_lang;
+};
+
+// Recursively collect all files matching any supported extension
+static std::vector<std::string> collect_files(
+    const std::string& root,
+    const std::unordered_map<std::string, LangEntry>& lang_map) {
     std::vector<std::string> files;
 
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(root, ec)) {
         if (!entry.is_regular_file()) continue;
-
         std::string ext = entry.path().extension().string();
-        for (const auto& target_ext : extensions) {
-            if (ext == target_ext) {
-                files.push_back(entry.path().string());
-                break;
-            }
+        if (lang_map.count(ext)) {
+            files.push_back(entry.path().string());
         }
     }
 
@@ -75,41 +82,60 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
-    // Set up language profile
-    PythonProfile profile;
+    // Register language profiles
+    PythonProfile python_profile;
+    JavaScriptProfile js_profile;
+
+    std::unordered_map<std::string, LangEntry> lang_map;
+    for (const auto& ext : python_profile.file_extensions()) {
+        lang_map[ext] = {&python_profile, tree_sitter_python()};
+    }
+    for (const auto& ext : js_profile.file_extensions()) {
+        lang_map[ext] = {&js_profile, tree_sitter_javascript()};
+    }
 
     // Collect source files
     std::vector<std::string> files;
     if (fs::is_regular_file(path)) {
         files.push_back(path);
     } else {
-        files = collect_files(path, profile.file_extensions());
+        files = collect_files(path, lang_map);
     }
 
     if (files.empty()) {
-        std::cerr << "No " << profile.name() << " files found in: " << path << "\n";
+        std::cerr << "No supported files found in: " << path << "\n";
         return 2;
     }
 
-    // Parse all files
+    // Parse all files (switch parser language per file)
     TSParserWrapper parser;
-    parser.set_language(tree_sitter_python());
+    const TSLanguage* current_lang = nullptr;
 
     std::vector<ASTNode> all_nodes;
     int files_parsed = 0;
     int total_files = static_cast<int>(files.size());
+    bool show_progress = !no_color && format != "json" && format != "graph";
 
     for (const auto& file : files) {
         files_parsed++;
-        if (!no_color && format != "json" && format != "graph") {
+        if (show_progress) {
             std::string short_name = fs::path(file).filename().string();
             print_progress("Parsing " + short_name, files_parsed, total_files);
         }
-        auto nodes = parser.parse_file(file, profile);
+
+        std::string ext = fs::path(file).extension().string();
+        auto it = lang_map.find(ext);
+        if (it == lang_map.end()) continue;
+
+        // Switch language if needed
+        if (it->second.ts_lang != current_lang) {
+            parser.set_language(it->second.ts_lang);
+            current_lang = it->second.ts_lang;
+        }
+
+        auto nodes = parser.parse_file(file, *it->second.profile);
         all_nodes.insert(all_nodes.end(), nodes.begin(), nodes.end());
     }
-
-    bool show_progress = !no_color && format != "json" && format != "graph";
 
     if (show_progress) print_progress("Building graph", 0, 0);
 
@@ -125,8 +151,23 @@ int main(int argc, char* argv[]) {
 
     if (show_progress) clear_progress();
 
-    // Build analysis context
-    AnalysisContext ctx{graph, all_nodes, profile, centrality, pagerank, {}};
+    // Build analysis context (use python_profile as default for analyzers)
+    // The analyzers check api_call_indicators which are language-specific,
+    // so we pick the profile that has the most files. For now, use a combined approach.
+    // Since AnalysisContext needs a single profile reference, we'll use whichever
+    // language had files. For mixed repos, Python takes priority.
+    const LanguageProfile* primary_profile = &python_profile;
+    {
+        int py_count = 0, js_count = 0;
+        for (const auto& file : files) {
+            std::string ext = fs::path(file).extension().string();
+            if (ext == ".py") py_count++;
+            else js_count++;
+        }
+        if (js_count > py_count) primary_profile = &js_profile;
+    }
+
+    AnalysisContext ctx{graph, all_nodes, *primary_profile, centrality, pagerank, {}};
 
     // Run all analyzers
     std::vector<Finding> all_findings;

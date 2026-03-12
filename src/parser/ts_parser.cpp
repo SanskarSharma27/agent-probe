@@ -161,41 +161,9 @@ void TSParserWrapper::extract_imports(TSNode node, const std::string& source,
                                        std::vector<ASTNode>& results) {
     const char* type = ts_node_type(node);
 
-    // "import X" or "import X, Y"
-    if (std::strcmp(type, profile.import_statement_type().c_str()) == 0) {
-        ASTNode imp;
-        imp.type = NodeType::IMPORT;
-        imp.file_path = file_path;
-        imp.start_line = ts_node_start_point(node).row + 1;
-        imp.end_line = ts_node_end_point(node).row + 1;
-
-        // Collect all dotted_name children as imported modules
-        uint32_t count = ts_node_named_child_count(node);
-        for (uint32_t i = 0; i < count; i++) {
-            TSNode child = ts_node_named_child(node, i);
-            const char* child_type = ts_node_type(child);
-            if (std::strcmp(child_type, "dotted_name") == 0 ||
-                std::strcmp(child_type, "aliased_import") == 0) {
-                std::string mod = node_text(child, source);
-                // For aliased imports like "import X as Y", just take the module name
-                if (std::strcmp(child_type, "aliased_import") == 0) {
-                    TSNode name = ts_node_named_child(child, 0);
-                    if (!ts_node_is_null(name)) mod = node_text(name, source);
-                }
-                if (imp.module.empty()) {
-                    imp.module = mod;
-                    imp.name = mod;
-                } else {
-                    imp.imported_names.push_back(mod);
-                }
-            }
-        }
-        results.push_back(std::move(imp));
-        return;
-    }
-
-    // "from X import Y, Z"
-    if (std::strcmp(type, profile.import_from_type().c_str()) == 0) {
+    // Python: "from X import Y, Z"
+    if (!profile.import_from_type().empty() &&
+        std::strcmp(type, profile.import_from_type().c_str()) == 0) {
         ASTNode imp;
         imp.type = NodeType::IMPORT;
         imp.file_path = file_path;
@@ -210,12 +178,10 @@ void TSParserWrapper::extract_imports(TSNode node, const std::string& source,
             imp.name = imp.module;
         }
 
-        // Collect imported names from the import list
         uint32_t count = ts_node_named_child_count(node);
         for (uint32_t i = 0; i < count; i++) {
             TSNode child = ts_node_named_child(node, i);
             const char* child_type = ts_node_type(child);
-
             if (std::strcmp(child_type, "dotted_name") == 0 &&
                 node_text(child, source) != imp.module) {
                 imp.imported_names.push_back(node_text(child, source));
@@ -230,8 +196,86 @@ void TSParserWrapper::extract_imports(TSNode node, const std::string& source,
         return;
     }
 
-    // Recurse into top-level children only
-    if (std::strcmp(type, "module") == 0) {
+    // import_statement — handles both Python ("import X") and JS ("import { a } from 'mod'")
+    if (std::strcmp(type, profile.import_statement_type().c_str()) == 0) {
+        ASTNode imp;
+        imp.type = NodeType::IMPORT;
+        imp.file_path = file_path;
+        imp.start_line = ts_node_start_point(node).row + 1;
+        imp.end_line = ts_node_end_point(node).row + 1;
+
+        // Try JS-style: look for "source" field (string literal)
+        TSNode source_node = ts_node_child_by_field_name(
+            node, profile.field_module_name().c_str(), profile.field_module_name().size()
+        );
+        if (!ts_node_is_null(source_node)) {
+            std::string mod = node_text(source_node, source);
+            // Strip quotes from JS string literals
+            if (mod.size() >= 2 && (mod.front() == '\'' || mod.front() == '"')) {
+                mod = mod.substr(1, mod.size() - 2);
+            }
+            imp.module = mod;
+            imp.name = mod;
+
+            // Collect JS import specifiers from import_clause
+            uint32_t count = ts_node_named_child_count(node);
+            for (uint32_t i = 0; i < count; i++) {
+                TSNode child = ts_node_named_child(node, i);
+                const char* child_type = ts_node_type(child);
+                if (std::strcmp(child_type, "import_clause") == 0) {
+                    uint32_t cc = ts_node_named_child_count(child);
+                    for (uint32_t j = 0; j < cc; j++) {
+                        TSNode ic_child = ts_node_named_child(child, j);
+                        const char* ic_type = ts_node_type(ic_child);
+                        if (std::strcmp(ic_type, "identifier") == 0) {
+                            imp.imported_names.push_back(node_text(ic_child, source));
+                        } else if (std::strcmp(ic_type, "named_imports") == 0) {
+                            uint32_t nc = ts_node_named_child_count(ic_child);
+                            for (uint32_t k = 0; k < nc; k++) {
+                                TSNode spec = ts_node_named_child(ic_child, k);
+                                if (std::strcmp(ts_node_type(spec), "import_specifier") == 0) {
+                                    TSNode sname = ts_node_child_by_field_name(spec, "name", 4);
+                                    if (!ts_node_is_null(sname)) {
+                                        imp.imported_names.push_back(node_text(sname, source));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Python-style: "import X, Y" with dotted_name children
+            uint32_t count = ts_node_named_child_count(node);
+            for (uint32_t i = 0; i < count; i++) {
+                TSNode child = ts_node_named_child(node, i);
+                const char* child_type = ts_node_type(child);
+                if (std::strcmp(child_type, "dotted_name") == 0 ||
+                    std::strcmp(child_type, "aliased_import") == 0) {
+                    std::string mod = node_text(child, source);
+                    if (std::strcmp(child_type, "aliased_import") == 0) {
+                        TSNode name = ts_node_named_child(child, 0);
+                        if (!ts_node_is_null(name)) mod = node_text(name, source);
+                    }
+                    if (imp.module.empty()) {
+                        imp.module = mod;
+                        imp.name = mod;
+                    } else {
+                        imp.imported_names.push_back(mod);
+                    }
+                }
+            }
+        }
+
+        if (!imp.module.empty()) {
+            results.push_back(std::move(imp));
+        }
+        return;
+    }
+
+    // Recurse into top-level children
+    std::string root = profile.root_node_type();
+    if (std::strcmp(type, root.c_str()) == 0 || std::strcmp(type, "module") == 0) {
         uint32_t count = ts_node_child_count(node);
         for (uint32_t i = 0; i < count; i++) {
             extract_imports(ts_node_child(node, i), source, file_path, profile, results);
@@ -244,6 +288,68 @@ void TSParserWrapper::extract_classes(TSNode node, const std::string& source,
                                        const LanguageProfile& profile,
                                        std::vector<ASTNode>& results) {
     const char* type = ts_node_type(node);
+    std::string method_type = profile.method_def_type();
+
+    // Helper: check if a node is a method-like definition
+    auto is_method = [&](const char* t) {
+        if (std::strcmp(t, profile.function_def_type().c_str()) == 0) return true;
+        if (!method_type.empty() && std::strcmp(t, method_type.c_str()) == 0) return true;
+        return false;
+    };
+
+    // Helper: extract base classes (Python: superclasses, JS: class_heritage)
+    auto extract_bases = [&](TSNode class_node, ASTNode& cls) {
+        // Python: "superclasses" field
+        TSNode supers = ts_node_child_by_field_name(class_node, "superclasses", 12);
+        if (!ts_node_is_null(supers)) {
+            uint32_t sc = ts_node_named_child_count(supers);
+            for (uint32_t j = 0; j < sc; j++) {
+                cls.base_classes.push_back(
+                    node_text(ts_node_named_child(supers, j), source));
+            }
+            return;
+        }
+        // JS: scan children for class_heritage node
+        uint32_t count = ts_node_child_count(class_node);
+        for (uint32_t i = 0; i < count; i++) {
+            TSNode child = ts_node_child(class_node, i);
+            if (std::strcmp(ts_node_type(child), "class_heritage") == 0) {
+                uint32_t hc = ts_node_named_child_count(child);
+                for (uint32_t j = 0; j < hc; j++) {
+                    cls.base_classes.push_back(
+                        node_text(ts_node_named_child(child, j), source));
+                }
+            }
+        }
+    };
+
+    // Helper: extract methods from class body
+    auto extract_body_methods = [&](TSNode body, ASTNode& cls) {
+        uint32_t bc = ts_node_child_count(body);
+        for (uint32_t j = 0; j < bc; j++) {
+            TSNode body_child = ts_node_child(body, j);
+            const char* bc_type = ts_node_type(body_child);
+            if (is_method(bc_type)) {
+                TSNode mname = ts_node_child_by_field_name(
+                    body_child, profile.field_name().c_str(), profile.field_name().size());
+                if (!ts_node_is_null(mname)) {
+                    cls.methods.push_back(node_text(mname, source));
+                }
+            } else if (std::strcmp(bc_type, "decorated_definition") == 0) {
+                uint32_t dc = ts_node_child_count(body_child);
+                for (uint32_t k = 0; k < dc; k++) {
+                    TSNode dd_child = ts_node_child(body_child, k);
+                    if (is_method(ts_node_type(dd_child))) {
+                        TSNode mname = ts_node_child_by_field_name(
+                            dd_child, profile.field_name().c_str(), profile.field_name().size());
+                        if (!ts_node_is_null(mname)) {
+                            cls.methods.push_back(node_text(mname, source));
+                        }
+                    }
+                }
+            }
+        }
+    };
 
     // Handle decorated classes
     if (std::strcmp(type, "decorated_definition") == 0) {
@@ -252,7 +358,6 @@ void TSParserWrapper::extract_classes(TSNode node, const std::string& source,
         for (uint32_t i = 0; i < count; i++) {
             TSNode child = ts_node_child(node, i);
             if (std::strcmp(ts_node_type(child), profile.class_def_type().c_str()) == 0) {
-                // Build class node with decorators
                 ASTNode cls;
                 cls.type = NodeType::CLASS_DEF;
                 cls.file_path = file_path;
@@ -261,55 +366,15 @@ void TSParserWrapper::extract_classes(TSNode node, const std::string& source,
                 cls.decorators = decorators;
 
                 TSNode name_node = ts_node_child_by_field_name(
-                    child, profile.field_name().c_str(), profile.field_name().size()
-                );
-                if (!ts_node_is_null(name_node)) {
-                    cls.name = node_text(name_node, source);
-                }
+                    child, profile.field_name().c_str(), profile.field_name().size());
+                if (!ts_node_is_null(name_node)) cls.name = node_text(name_node, source);
 
-                // Extract base classes from superclasses/argument_list
-                TSNode supers = ts_node_child_by_field_name(child, "superclasses", 12);
-                if (!ts_node_is_null(supers)) {
-                    uint32_t sc = ts_node_named_child_count(supers);
-                    for (uint32_t j = 0; j < sc; j++) {
-                        cls.base_classes.push_back(
-                            node_text(ts_node_named_child(supers, j), source)
-                        );
-                    }
-                }
+                extract_bases(child, cls);
 
-                // Extract method names from class body
                 TSNode body = ts_node_child_by_field_name(
-                    child, profile.field_body().c_str(), profile.field_body().size()
-                );
+                    child, profile.field_body().c_str(), profile.field_body().size());
                 if (!ts_node_is_null(body)) {
-                    uint32_t bc = ts_node_child_count(body);
-                    for (uint32_t j = 0; j < bc; j++) {
-                        TSNode body_child = ts_node_child(body, j);
-                        const char* bc_type = ts_node_type(body_child);
-                        if (std::strcmp(bc_type, profile.function_def_type().c_str()) == 0) {
-                            TSNode mname = ts_node_child_by_field_name(
-                                body_child, profile.field_name().c_str(), profile.field_name().size()
-                            );
-                            if (!ts_node_is_null(mname)) {
-                                cls.methods.push_back(node_text(mname, source));
-                            }
-                        } else if (std::strcmp(bc_type, "decorated_definition") == 0) {
-                            // Decorated method
-                            uint32_t dc = ts_node_child_count(body_child);
-                            for (uint32_t k = 0; k < dc; k++) {
-                                TSNode dd_child = ts_node_child(body_child, k);
-                                if (std::strcmp(ts_node_type(dd_child), profile.function_def_type().c_str()) == 0) {
-                                    TSNode mname = ts_node_child_by_field_name(
-                                        dd_child, profile.field_name().c_str(), profile.field_name().size()
-                                    );
-                                    if (!ts_node_is_null(mname)) {
-                                        cls.methods.push_back(node_text(mname, source));
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    extract_body_methods(body, cls);
                 }
 
                 results.push_back(std::move(cls));
@@ -326,56 +391,15 @@ void TSParserWrapper::extract_classes(TSNode node, const std::string& source,
         cls.end_line = ts_node_end_point(node).row + 1;
 
         TSNode name_node = ts_node_child_by_field_name(
-            node, profile.field_name().c_str(), profile.field_name().size()
-        );
-        if (!ts_node_is_null(name_node)) {
-            cls.name = node_text(name_node, source);
-        }
+            node, profile.field_name().c_str(), profile.field_name().size());
+        if (!ts_node_is_null(name_node)) cls.name = node_text(name_node, source);
 
-        // Base classes
-        TSNode supers = ts_node_child_by_field_name(node, "superclasses", 12);
-        if (!ts_node_is_null(supers)) {
-            uint32_t sc = ts_node_named_child_count(supers);
-            for (uint32_t j = 0; j < sc; j++) {
-                cls.base_classes.push_back(
-                    node_text(ts_node_named_child(supers, j), source)
-                );
-            }
-        }
+        extract_bases(node, cls);
 
-        // Method names from body
         TSNode body = ts_node_child_by_field_name(
-            node, profile.field_body().c_str(), profile.field_body().size()
-        );
+            node, profile.field_body().c_str(), profile.field_body().size());
         if (!ts_node_is_null(body)) {
-            uint32_t bc = ts_node_child_count(body);
-            for (uint32_t j = 0; j < bc; j++) {
-                TSNode body_child = ts_node_child(body, j);
-                const char* bc_type = ts_node_type(body_child);
-                if (std::strcmp(bc_type, profile.function_def_type().c_str()) == 0) {
-                    TSNode mname = ts_node_child_by_field_name(
-                        body_child, profile.field_name().c_str(), profile.field_name().size()
-                    );
-                    if (!ts_node_is_null(mname)) {
-                        cls.methods.push_back(node_text(mname, source));
-                    }
-                } else if (std::strcmp(bc_type, "decorated_definition") == 0) {
-                    uint32_t dc = ts_node_child_count(body_child);
-                    for (uint32_t k = 0; k < dc; k++) {
-                        TSNode dd_child = ts_node_child(body_child, k);
-                        if (std::strcmp(ts_node_type(dd_child), profile.function_def_type().c_str()) == 0) {
-                            TSNode mname = ts_node_child_by_field_name(
-                                dd_child, profile.field_name().c_str(), profile.field_name().size()
-                            );
-                            if (!ts_node_is_null(mname)) {
-                                cls.methods.push_back(node_text(mname, source));
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Also extract methods as FUNCTION_DEF nodes with parent_class set
+            extract_body_methods(body, cls);
             extract_functions(body, source, file_path, profile, results, cls.name);
         }
 
@@ -384,7 +408,8 @@ void TSParserWrapper::extract_classes(TSNode node, const std::string& source,
     }
 
     // Recurse
-    if (std::strcmp(type, "module") == 0) {
+    std::string root = profile.root_node_type();
+    if (std::strcmp(type, root.c_str()) == 0 || std::strcmp(type, "module") == 0) {
         uint32_t count = ts_node_child_count(node);
         for (uint32_t i = 0; i < count; i++) {
             extract_classes(ts_node_child(node, i), source, file_path, profile, results);
@@ -449,8 +474,12 @@ void TSParserWrapper::extract_functions(TSNode node, const std::string& source,
         return;
     }
 
-    // Handle function definitions
-    if (std::strcmp(type, profile.function_def_type().c_str()) == 0) {
+    // Handle function definitions and method_definition (JS class methods)
+    std::string method_type = profile.method_def_type();
+    bool is_func_def = (std::strcmp(type, profile.function_def_type().c_str()) == 0);
+    bool is_method_def = (!method_type.empty() && std::strcmp(type, method_type.c_str()) == 0);
+
+    if (is_func_def || is_method_def) {
         ASTNode fn;
         fn.type = NodeType::FUNCTION_DEF;
         fn.file_path = file_path;
@@ -481,6 +510,46 @@ void TSParserWrapper::extract_functions(TSNode node, const std::string& source,
 
         results.push_back(std::move(fn));
         return;
+    }
+
+    // Handle arrow functions: const foo = (a, b) => { ... }
+    // The arrow_function itself has no name; the name comes from the
+    // parent variable_declarator's "name" field.
+    std::string arrow_type = profile.arrow_function_type();
+    if (!arrow_type.empty() && std::strcmp(type, "variable_declarator") == 0) {
+        // Check if the "value" child is an arrow function
+        TSNode value = ts_node_child_by_field_name(node, "value", 5);
+        if (!ts_node_is_null(value) &&
+            std::strcmp(ts_node_type(value), arrow_type.c_str()) == 0) {
+            ASTNode fn;
+            fn.type = NodeType::FUNCTION_DEF;
+            fn.file_path = file_path;
+            fn.parent_class = parent_class;
+            fn.start_line = ts_node_start_point(value).row + 1;
+            fn.end_line = ts_node_end_point(value).row + 1;
+
+            TSNode name_node = ts_node_child_by_field_name(node, "name", 4);
+            if (!ts_node_is_null(name_node)) {
+                fn.name = node_text(name_node, source);
+            }
+
+            TSNode params = ts_node_child_by_field_name(
+                value, profile.field_parameters().c_str(), profile.field_parameters().size()
+            );
+            if (!ts_node_is_null(params)) {
+                fn.parameters = extract_parameters(params, source);
+            }
+
+            TSNode body = ts_node_child_by_field_name(
+                value, profile.field_body().c_str(), profile.field_body().size()
+            );
+            if (!ts_node_is_null(body)) {
+                collect_calls(body, source, profile, fn.called_functions);
+            }
+
+            results.push_back(std::move(fn));
+            return;
+        }
     }
 
     // Skip class definitions (handled by extract_classes)
