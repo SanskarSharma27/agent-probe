@@ -158,9 +158,10 @@ cmake --build build
 agent-probe [OPTIONS]
 
 Options:
-  -p, --path PATH           Path to repository or file to scan (default: ".")
+  -p, --path PATH           Path to repo, file, or GitHub URL to scan (default: ".")
   -f, --format FORMAT       Output format: table, json, summary, graph
   -c, --min-confidence N    Minimum confidence threshold 0.0-1.0 (default: 0.0)
+  -e, --exclude DIR         Additional directory names to skip (repeatable)
   --no-color                Disable ANSI colored output
   --version                 Print version
   -h, --help                Print help
@@ -222,7 +223,47 @@ agent-probe -p ./src -f graph
 
 Returns JSON with `nodes` (name, file, PageRank, finding types), `edges` (source, target, type, weight), and `findings` — consumed by the D3.js frontend.
 
-### Filtering
+### Scan a GitHub Repo Directly
+
+No need to clone manually — pass a GitHub URL and agent-probe handles the rest:
+
+```bash
+agent-probe -p https://github.com/pallets/flask
+```
+
+This runs `git clone --depth 1` to a temp directory, scans, and cleans up automatically. Works with any public repo.
+
+```
+$ agent-probe -p https://github.com/pallets/flask -f summary
+
+Cloning https://github.com/pallets/flask ...
+agent-probe v0.1.0
+Scanned 83 files, 1468 AST nodes
+Graph: 857 nodes, 1691 edges
+
+Findings: 253
+  Fan-out:        242
+  Retry patterns: 9
+  CRUD clusters:  2
+```
+
+### Directory Filtering
+
+agent-probe automatically skips common non-source directories:
+
+> `.git`, `.venv`, `venv`, `node_modules`, `__pycache__`, `build`, `dist`, `site-packages`, `.mypy_cache`, `.pytest_cache`, `.tox`, `.next`, `vendor`, `target`, `.idea`, `.vscode`, and all hidden directories (starting with `.`)
+
+Exclude additional directories with `-e`:
+
+```bash
+# Skip tests and scripts
+agent-probe -p ./my-project -e tests -e scripts
+
+# Skip generated code
+agent-probe -p ./my-project -e generated -e proto_out
+```
+
+### Filtering by Confidence
 
 Show only high-confidence findings:
 ```bash
@@ -267,6 +308,11 @@ The visualization provides:
 - **Click-to-highlight** connected nodes and edges
 - **Sidebar** with scan stats, findings list, and legend
 - **Drag and zoom** for exploring large graphs
+- **GitHub URL input** — paste a repo URL, the server clones and scans it (no local checkout needed)
+
+The web UI has two input modes toggled by tabs:
+- **Local Path** — scan a directory on the machine running the server
+- **GitHub URL** — enter `https://github.com/owner/repo`, the backend clones it via `git clone --depth 1`, scans, and cleans up
 
 ---
 
@@ -386,11 +432,11 @@ $ ctest --output-on-failure
 
 ## Project Stats
 
-- **~2,550 lines** of C++ source code (26 files)
+- **~2,670 lines** of C++ source code (26 files)
 - **~1,380 lines** of C++ test code (5 test files)
-- **~560 lines** of web frontend (HTML/JS/CSS)
+- **~620 lines** of web frontend (HTML/JS/CSS)
 - **73 tests**, all passing
-- **27 commits** over 8 development phases
+- **29 commits** over 8 development phases
 - **Zero runtime dependencies** — all libraries statically linked
 
 ---
@@ -455,7 +501,24 @@ if (strcmp(ts_node_type(value_node), "arrow_function") == 0) {
 
 **Fix**: Separated the import extraction by checking `profile.import_from_type()` — Python returns `"import_from_statement"` (non-empty), JavaScript returns `""`. The JS path extracts the module name from the `source` field (a string literal that needs quote stripping), and named imports from `named_imports` > `import_specifier` children.
 
-### 6. GoogleTest Discovery with MinGW
+### 6. Scanning 16,000 Files Instead of 60
+
+**Problem**: Running agent-probe on a real project showed 16,189 files to scan. The tool was walking into `.venv` (thousands of installed packages), `node_modules`, `__pycache__`, `.git` internals, and every other non-source directory.
+
+**Root cause**: The original `collect_files()` did a naive `recursive_directory_iterator` filtered only by file extension — no directory pruning at all.
+
+**Fix**: Added a hardcoded skip set of 25+ common non-source directory names (`.venv`, `node_modules`, `build`, `dist`, `__pycache__`, `site-packages`, etc.) and an `--exclude` CLI flag for user-specified additions. Also skip all hidden directories (starting with `.`) by default. Uses `disable_recursion_pending()` to prune entire subtrees efficiently instead of checking every file:
+```cpp
+if (entry.is_directory()) {
+    std::string dirname = entry.path().filename().string();
+    if (skip.count(dirname) || dirname[0] == '.') {
+        it.disable_recursion_pending();  // skip entire subtree
+    }
+}
+```
+Result: 16,189 files → 63 files for the same project.
+
+### 7. GoogleTest Discovery with MinGW
 
 **Problem**: `gtest_discover_tests()` sometimes fails on Windows/MinGW because the test executable can't find its DLLs during the CMake test discovery phase (which runs the binary to enumerate tests).
 
@@ -487,12 +550,27 @@ The executable can't find MinGW runtime DLLs. Either:
 - Add `C:\msys64\ucrt64\bin` to your system PATH
 - Rebuild with `-static` flag: `cmake -B build -DCMAKE_EXE_LINKER_FLAGS="-static"`
 
+### Scanning Too Many Files
+
+The tool scans thousands of files unexpectedly — likely walking into `node_modules`, `.venv`, or `build`. agent-probe skips these by default, but if you see unexpected counts:
+```bash
+# Exclude additional directories
+agent-probe -p ./repo -e my_custom_build_dir -e generated
+```
+
 ### No Findings Produced
 
 Check that:
 1. The path contains `.py`, `.js`, `.jsx`, `.ts`, `.tsx`, or `.mjs` files
 2. The files contain actual function definitions (not just module-level code)
 3. Your `--min-confidence` threshold isn't too high (try `-c 0.0`)
+
+### GitHub Clone Fails
+
+```
+Error: git clone failed: ...
+```
+Ensure `git` is installed and on PATH. The tool runs `git clone --depth 1` via a shell command. For private repos, ensure your Git credentials (SSH key or credential helper) are configured. The web UI's GitHub scan has a 120-second timeout for large repos.
 
 ### Tests Fail with "fixture not found"
 
