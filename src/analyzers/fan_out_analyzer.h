@@ -10,7 +10,7 @@ namespace probe {
 // agent-based automation.
 class FanOutAnalyzer : public Analyzer {
 public:
-    explicit FanOutAnalyzer(int min_out_degree = 3, double centrality_threshold = 0.1)
+    explicit FanOutAnalyzer(int min_out_degree = 4, double centrality_threshold = 0.15)
         : min_out_degree_(min_out_degree), centrality_threshold_(centrality_threshold) {}
 
     std::string name() const override { return "fan_out"; }
