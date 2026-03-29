@@ -15,10 +15,9 @@ CONF    TYPE          LINE      FUNCTION                        FILE
 0.81    CRUD          32        user (CRUD cluster)             flask_app.py
 0.75    API_CALL      54        get_weather                     flask_app.py
 0.65    API_CALL      59        sync_with_retry                 flask_app.py
-0.54    FAN_OUT       10        DatabaseClient.getUser          express_app.js
-0.50    FAN_OUT       78        orchestrate                     express_app.js
+0.48    FAN_OUT       78        orchestrate                     express_app.js
 
-11 finding(s)
+5 finding(s)
 ```
 
 ---
@@ -75,7 +74,7 @@ Source Code (.py, .js, .ts, .jsx, .tsx, .mjs)
     v
 [Confidence Scorer] -----> type weight x evidence x PageRank boost
     v
-[Output: table | json | summary | graph]
+[Output: table | json | summary | graph | plan]
     |
     v
 [Optional: FastAPI + D3.js visualization]
@@ -159,7 +158,7 @@ agent-probe [OPTIONS]
 
 Options:
   -p, --path PATH           Path to repo, file, or GitHub URL to scan (default: ".")
-  -f, --format FORMAT       Output format: table, json, summary, graph
+  -f, --format FORMAT       Output format: table, json, summary, graph, plan
   -c, --min-confidence N    Minimum confidence threshold 0.0-1.0 (default: 0.0)
   -e, --exclude DIR         Additional directory names to skip (repeatable)
   --no-color                Disable ANSI colored output
@@ -194,7 +193,10 @@ agent-probe -p ./src -f json
         "contains sleep/delay call",
         "calls API: requests.post",
         "name suggests retry/polling pattern"
-      ]
+      ],
+      "suggested_role": "Autonomous retry agent with configurable backoff and dead-letter queue",
+      "rationale": "Function already handles retry logic manually. An agent replaces brittle sleep/loop with observable, configurable backoff and failure routing.",
+      "framework": "langchain"
     }
   ]
 }
@@ -209,9 +211,9 @@ agent-probe v0.1.0
 Scanned 3 files, 47 AST nodes
 Graph: 33 nodes, 32 edges
 
-Findings: 11
+Findings: 5
   API calls:      2
-  Fan-out:        7
+  Fan-out:        1
   Retry patterns: 1
   CRUD clusters:  1
 ```
@@ -222,6 +224,55 @@ agent-probe -p ./src -f graph
 ```
 
 Returns JSON with `nodes` (name, file, PageRank, finding types), `edges` (source, target, type, weight), and `findings` — consumed by the D3.js frontend.
+
+**Plan** — actionable integration guide with LangChain scaffolds:
+```bash
+agent-probe -p ./src -f plan
+```
+
+Generates a markdown document mapping each finding to a concrete agent pattern:
+
+```markdown
+# Agent Integration Plan
+
+## Summary
+
+| Type | Count | Agent Pattern |
+|------|-------|---------------|
+| Retry/Polling | 1 | Autonomous retry agent with configurable backoff |
+| API Boundary | 2 | Boundary agent with caching and fallback |
+
+## Integration Points
+
+### 1. sync_with_retry — `flask_app.py:59`
+
+**Type**: RETRY | **Confidence**: 1.00
+
+**Why**: Function already handles retry logic manually. An agent replaces
+brittle sleep/loop with observable, configurable backoff and failure routing.
+
+**Suggested agent role**: Autonomous retry agent with configurable backoff
+and dead-letter queue
+
+**LangChain scaffold**:
+    from langchain.tools import tool
+    from langchain.agents import AgentExecutor
+
+    @tool
+    def sync_with_retry_agent(input: dict) -> dict:
+        """Agent wrapper for sync_with_retry."""
+        # TODO: implement agent logic
+        pass
+```
+
+Each finding type maps to a specific agent pattern:
+
+| Finding Type | Agent Pattern | What the Agent Does |
+|---|---|---|
+| **RETRY** | Autonomous retry agent | Replaces manual sleep/loop with observable backoff + dead-letter queue |
+| **API_CALL** | Boundary agent | Adds caching, rate limiting, and fallback logic at service boundaries |
+| **FAN_OUT** | Orchestration agent | Parallelizes downstream calls, handles partial failures, adds tracing |
+| **CRUD** | Data lifecycle agent | Adds event emission, audit logging, and workflow triggers on mutations |
 
 ### Scan a GitHub Repo Directly
 
@@ -330,9 +381,10 @@ Confidence is boosted when the function has decorators (route handlers) or is a 
 ### Fan-Out Analyzer
 
 Identifies orchestrator functions that coordinate multiple downstream calls:
-1. Compute out-degree (number of outgoing CALLS edges)
-2. Apply betweenness centrality — functions that sit on many shortest paths between other functions are structural hubs
-3. Functions with high out-degree AND high centrality are likely orchestration points
+1. Count CALLS edges only (ignoring CONTAINS, IMPORTS) — requires >= 4 outgoing calls
+2. Filter by PageRank floor (must be above 50% of average) — eliminates low-importance functions in large graphs
+3. Apply betweenness centrality as a confidence booster — functions on many shortest paths get higher scores
+4. Only functions passing ALL gates are reported, preventing noise from functions that merely call a few helpers
 
 ### Retry/Polling Analyzer
 
@@ -427,17 +479,6 @@ $ ctest --output-on-failure
 | ParserTest | 3 | Function extraction, method calls, multiple functions |
 | FlaskFixtureTest | 6 | Full Flask app: imports, classes, decorators, calls |
 | TreeSitterTest | 3 | Parser initialization, basic Python parsing |
-
----
-
-## Project Stats
-
-- **~2,670 lines** of C++ source code (26 files)
-- **~1,380 lines** of C++ test code (5 test files)
-- **~620 lines** of web frontend (HTML/JS/CSS)
-- **73 tests**, all passing
-- **29 commits** over 8 development phases
-- **Zero runtime dependencies** — all libraries statically linked
 
 ---
 
