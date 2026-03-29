@@ -113,6 +113,44 @@ std::string format_graph_json(const std::vector<Finding>& findings, const ScanSt
     return output.dump(2);
 }
 
+// ─── Per-type agent integration metadata ─────────────────────────
+
+struct AgentPattern {
+    const char* suggested_role;
+    const char* rationale;
+    const char* langchain_pattern;
+};
+
+static AgentPattern agent_pattern_for(FindingType type) {
+    switch (type) {
+        case FindingType::RETRY_PATTERN:
+            return {
+                "Autonomous retry agent with configurable backoff and dead-letter queue",
+                "Function already handles retry logic manually. An agent replaces brittle sleep/loop with observable, configurable backoff and failure routing.",
+                "from langchain.tools import tool\nfrom langchain.agents import AgentExecutor"
+            };
+        case FindingType::API_CALL:
+            return {
+                "Boundary agent with caching, rate limiting, and fallback logic",
+                "Function crosses a service boundary via external API call. An agent at this boundary can add intelligent caching, automatic rate limit handling, and graceful fallback to stale data.",
+                "from langchain.tools import tool\nfrom langchain.cache import InMemoryCache"
+            };
+        case FindingType::FAN_OUT:
+            return {
+                "Orchestration agent that parallelizes calls and handles partial failures",
+                "Function coordinates multiple downstream calls. An agent can parallelize independent calls, handle partial failures gracefully, and add distributed tracing.",
+                "from langchain.agents import AgentExecutor\nfrom langchain.tools import StructuredTool"
+            };
+        case FindingType::CRUD_CLUSTER:
+            return {
+                "Data lifecycle agent with event emission and audit logging",
+                "Functions manage a data entity lifecycle (create/read/update/delete). An agent can add event-driven workflows, audit trails, and mutation validation.",
+                "from langchain.tools import tool\nfrom langchain.callbacks import StdOutCallbackHandler"
+            };
+    }
+    return {"Unknown", "", ""};
+}
+
 std::string format_json(const std::vector<Finding>& findings, const ScanStats& stats) {
     nlohmann::json output;
     output["version"] = stats.version;
@@ -134,6 +172,12 @@ std::string format_json(const std::vector<Finding>& findings, const ScanStats& s
         fj["confidence"] = f.confidence;
         fj["reason"] = f.reason;
         fj["evidence"] = f.evidence;
+
+        auto pattern = agent_pattern_for(f.type);
+        fj["suggested_role"] = pattern.suggested_role;
+        fj["rationale"] = pattern.rationale;
+        fj["framework"] = "langchain";
+
         findings_json.push_back(fj);
     }
     output["findings"] = findings_json;
@@ -254,6 +298,95 @@ std::string format_table_color(const std::vector<Finding>& findings, const ScanS
     }
 
     out << "\n" << BOLD << findings.size() << " finding(s)" << RESET << "\n";
+    return out.str();
+}
+
+std::string format_plan(const std::vector<Finding>& findings, const ScanStats& stats) {
+    std::ostringstream out;
+
+    out << "# Agent Integration Plan\n\n";
+    out << "**Source**: `" << stats.path << "`\n";
+    out << "**Scanned**: " << stats.files_scanned << " files, "
+        << stats.graph_nodes << " graph nodes, "
+        << stats.graph_edges << " edges\n";
+    out << "**Findings**: " << findings.size() << "\n\n";
+    out << "---\n\n";
+
+    if (findings.empty()) {
+        out << "No agent integration points detected.\n";
+        return out.str();
+    }
+
+    // Type summary table
+    int api = 0, fan = 0, retry = 0, crud = 0;
+    for (const auto& f : findings) {
+        switch (f.type) {
+            case FindingType::API_CALL: api++; break;
+            case FindingType::FAN_OUT: fan++; break;
+            case FindingType::RETRY_PATTERN: retry++; break;
+            case FindingType::CRUD_CLUSTER: crud++; break;
+        }
+    }
+
+    out << "## Summary\n\n";
+    out << "| Type | Count | Agent Pattern |\n";
+    out << "|------|-------|---------------|\n";
+    if (retry) out << "| Retry/Polling | " << retry << " | Autonomous retry agent with configurable backoff |\n";
+    if (api) out << "| API Boundary | " << api << " | Boundary agent with caching and fallback |\n";
+    if (fan) out << "| Fan-Out Hub | " << fan << " | Orchestration agent with parallel execution |\n";
+    if (crud) out << "| CRUD Cluster | " << crud << " | Data lifecycle agent with event emission |\n";
+    out << "\n---\n\n";
+
+    // Individual findings
+    out << "## Integration Points\n\n";
+
+    int idx = 1;
+    for (const auto& f : findings) {
+        auto pattern = agent_pattern_for(f.type);
+
+        out << "### " << idx << ". " << f.function_name
+            << " — `" << f.file_path << ":" << f.line_number << "`\n\n";
+
+        out << "**Type**: " << finding_type_str(f.type)
+            << " | **Confidence**: " << std::fixed << std::setprecision(2) << f.confidence << "\n\n";
+
+        out << "**Why**: " << pattern.rationale << "\n\n";
+
+        out << "**Suggested agent role**: " << pattern.suggested_role << "\n\n";
+
+        // Evidence
+        out << "**Evidence**:\n";
+        for (const auto& e : f.evidence) {
+            out << "- " << e << "\n";
+        }
+        out << "\n";
+
+        // LangChain stub — sanitize function name for valid Python identifier
+        std::string safe_name;
+        for (char c : f.function_name) {
+            if (std::isalnum(c) || c == '_') safe_name += c;
+            else if (c == '.' || c == ' ') safe_name += '_';
+        }
+
+        out << "**LangChain scaffold**:\n";
+        out << "```python\n";
+        out << pattern.langchain_pattern << "\n\n";
+        out << "@tool\n";
+        out << "def " << safe_name << "_agent(input: dict) -> dict:\n";
+        out << "    \"\"\"\n";
+        out << "    Agent wrapper for " << f.function_name << ".\n";
+        out << "    " << pattern.suggested_role << "\n";
+        out << "    \"\"\"\n";
+        out << "    # TODO: implement agent logic\n";
+        out << "    pass\n";
+        out << "```\n\n";
+
+        out << "---\n\n";
+        idx++;
+    }
+
+    out << "*Generated by agent-probe v" << stats.version << "*\n";
+
     return out.str();
 }
 

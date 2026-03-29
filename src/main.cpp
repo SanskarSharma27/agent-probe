@@ -168,7 +168,7 @@ int main(int argc, char* argv[]) {
 
     app.add_option("-p,--path", path, "Path to repository or GitHub URL to scan");
     app.add_option("-f,--format", format, "Output format: table, json, summary, graph")
-        ->check(CLI::IsMember({"table", "json", "summary", "graph"}));
+        ->check(CLI::IsMember({"table", "json", "summary", "graph", "plan"}));
     app.add_option("-c,--min-confidence", min_confidence, "Minimum confidence threshold (0.0-1.0)")
         ->check(CLI::Range(0.0, 1.0));
     app.add_flag("--no-color", no_color, "Disable colored output");
@@ -229,7 +229,7 @@ int main(int argc, char* argv[]) {
     std::vector<ASTNode> all_nodes;
     int files_parsed = 0;
     int total_files = static_cast<int>(files.size());
-    bool show_progress = !no_color && format != "json" && format != "graph";
+    bool show_progress = !no_color && format != "json" && format != "graph" && format != "plan";
 
     for (const auto& file : files) {
         files_parsed++;
@@ -329,6 +329,8 @@ int main(int argc, char* argv[]) {
         std::cout << format_graph_json(filtered, stats, graph, pagerank) << "\n";
     } else if (format == "json") {
         std::cout << format_json(filtered, stats) << "\n";
+    } else if (format == "plan") {
+        std::cout << format_plan(filtered, stats);
     } else if (format == "summary") {
         std::cout << format_summary(filtered, stats);
     } else if (no_color) {

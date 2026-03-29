@@ -36,6 +36,9 @@ std::string format_graph_json(const std::vector<Finding>& findings, const ScanSt
 // Format findings as a colored table (ANSI escape codes)
 std::string format_table_color(const std::vector<Finding>& findings, const ScanStats& stats);
 
+// Format findings as an actionable integration plan (Markdown)
+std::string format_plan(const std::vector<Finding>& findings, const ScanStats& stats);
+
 // Print a progress line to stderr (overwrites previous line)
 void print_progress(const std::string& message, int current, int total);
 
